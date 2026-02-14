@@ -1,0 +1,109 @@
+name: Accessibility Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    # Run daily at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  accessibility-tests:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install Playwright browsers
+      run: npm run install:browsers
+
+    - name: Run accessibility tests
+      run: npm test
+      continue-on-error: true
+
+    - name: Generate HTML report
+      if: always()
+      run: npm run report
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: accessibility-results
+        path: |
+          results/
+          playwright-report/
+        retention-days: 30
+
+    - name: Upload HTML report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: accessibility-report
+        path: results/report.html
+        retention-days: 30
+
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          try {
+            const latestFile = 'results/latest.json';
+            if (fs.existsSync(latestFile)) {
+              const results = JSON.parse(fs.readFileSync(latestFile, 'utf8'));
+              
+              const comment = `## 🔍 Accessibility Test Results
+              
+**Summary:**
+- 📄 Pages tested: ${results.totalPages}
+- ⚠️ Total violations: ${results.totalViolations}
+- ✅ Passed: ${results.passedPages}
+- ❌ Failed: ${results.failedPages}
+
+${results.totalViolations === 0 ? '🎉 **No accessibility violations found!**' : '⚠️ **Accessibility issues detected. Please review the detailed report.**'}
+
+[View detailed report in artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+              `;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+          } catch (error) {
+            console.log('Could not post comment:', error.message);
+          }
+
+    - name: Publish results to GitHub Pages (optional)
+      if: github.ref == 'refs/heads/main' && always()
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./results
+        destination_dir: accessibility-reports
+        keep_files: true
+      continue-on-error: true
